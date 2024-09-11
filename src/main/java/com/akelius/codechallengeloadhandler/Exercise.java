@@ -31,6 +31,9 @@ public class Exercise {
             // cancel the consumer stats printout
             fut.cancel(false);
 
+            // stop the loadHandler
+            loadHandler.stop();
+
             // check the consumer rate, fail if it's too high (tolerance 25%)
             if (consumer.getRate() > (MAX_PRICE_UPDATES_PER_SECOND * 1.25)) {
                 throw new RuntimeException("Too many updates per second");
@@ -79,17 +82,63 @@ public class Exercise {
 
     public static class LoadHandler {
 
+        private static final int INTERVAL_MILLIS = 100;
+
         private final Consumer consumer;
+        private final Map<String, ConcurrentLinkedDeque<PriceUpdate>> priceUpdateBuffer = new ConcurrentHashMap<>();
+        private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1); // Single thread for the scheduler
 
         public LoadHandler(final Consumer consumer) {
             this.consumer = consumer;
+            scheduler.scheduleAtFixedRate(this::sendBufferedUpdates, 0, INTERVAL_MILLIS, TimeUnit.MILLISECONDS);
         }
 
         public void receive(final PriceUpdate priceUpdate) {
-
-            consumer.send(Collections.singletonList(priceUpdate));
+            priceUpdateBuffer
+                    .computeIfAbsent(priceUpdate.companyName(), k -> new ConcurrentLinkedDeque<>())
+                    .add(priceUpdate);
         }
 
+        private long lastRun = System.currentTimeMillis();
+
+        private void sendBufferedUpdates() {
+            long now = System.currentTimeMillis();
+            long sinceLastRun = now - lastRun;
+            lastRun = now;
+            long batchSize = Math.round(MAX_PRICE_UPDATES_PER_SECOND * sinceLastRun / 1000.0);
+
+            List<PriceUpdate> updatesToSend = new ArrayList<>();
+            synchronized (priceUpdateBuffer) {
+                Set<String> companies = priceUpdateBuffer.keySet();
+                infiniteLoop:
+                while (true) {
+                    for (String company : companies) {
+                        ConcurrentLinkedDeque<PriceUpdate> stack = priceUpdateBuffer.get(company);
+                        PriceUpdate update = stack.pollLast();
+                        if (update != null) {
+                            updatesToSend.add(update);
+                        }
+                        if (updatesToSend.size() >= batchSize) {
+                            break infiniteLoop;
+                        }
+                    }
+                }
+                priceUpdateBuffer.clear();
+            }
+
+            consumer.send(updatesToSend);
+        }
+
+        public void stop() {
+            scheduler.shutdown();
+            try {
+                if (!scheduler.awaitTermination(1, TimeUnit.SECONDS)) {
+                    scheduler.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                scheduler.shutdownNow();
+            }
+        }
     }
 
     public record PriceUpdate(String companyName, double price) {
