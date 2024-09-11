@@ -1,27 +1,35 @@
-# code-challenge-load-handler
+# Code Challenge Load Handler
 
 ## Scenario
 
-There are 3 components:
+The system consists of three components:
 
-- a producer (`com.akelius.codechallengeloadhandler.Exercise.Producer`) of price updates for stocks. This component
-  generates constant price updates. The producer should not block, every price update has to consumed as quickly as
+- **Producer** (`com.akelius.codechallengeloadhandler.Exercise.Producer`): This component generates continuous price
+  updates for stocks. It should operate without blocking, ensuring that each price update is consumed as quickly as
   possible.
 
-- a consumer (`com.akelius.codechallengeloadhandler.Exercise.Consumer`) of price updates for stocks. This component
-  processes the price updates. **The consumer is representing a legacy system that cannot consumer more than a certain
-  number of price updates per second**.
+- **Consumer** (`com.akelius.codechallengeloadhandler.Exercise.Consumer`): This component processes the price updates.
+  **It represents a legacy system that can handle only a limited number of price updates per second**.
 
-- a load handler (`com.akelius.codechallengeloadhandler.Exercise.LoadHandler`) to handle the traffic. This component
-  receives the price updates from the producer and pass them to the consumer. In the current implementation the load
-  handler is just passing on the update to a consumer. This should be changed.
+- **Load Handler** (`com.akelius.codechallengeloadhandler.Exercise.LoadHandler`): This component manages the flow of
+  traffic between the producer and the consumer. Currently, it merely forwards the updates from the producer to the
+  consumer. This behavior needs to be modified.
 
 ## Task
 
-The task of this exercise is to update the `LoadHandler` to limit the updates per second to the consumer to a certain
-given number (`MAX_PRICE_UPDATES`).
+Your task is to update the `LoadHandler` to enforce a rate limit on the number of updates sent to the consumer,
+restricting it to a specified maximum (`MAX_PRICE_UPDATES` per second).
 
-If a price update will be sent to the consumer, it has to be the most recent price.
+When sending updates to the consumer, ensure that only the most recent updates are considered. It is permissible to drop
+price updates if necessary.
 
-It is allowed to drop price updates.
+### Extra Bonus Point
 
+As an extra bonus point, implement a mechanism that:
+
+1. Ensures the distribution of updates among different stocks is as equal as possible, even when older updates are
+   included.
+2. If the update rate permits, sends older updates to maximize the detail of price variations.
+
+This means balancing the number of updates per stock to maintain a fair representation of price variations while also
+allowing older updates to provide more detailed price information if the system’s update rate allows it.
