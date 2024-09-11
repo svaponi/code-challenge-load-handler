@@ -1,24 +1,48 @@
 package com.akelius.codechallengeloadhandler;
 
 import java.util.*;
+import java.util.concurrent.*;
 
 public class Exercise {
 
     private static final int MAX_PRICE_UPDATES_PER_SECOND = 100;
+    private static final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
 
     public static void main(final String[] args) {
-        final Consumer consumer = new Consumer();
-        final LoadHandler loadHandler = new LoadHandler(consumer);
-        final Producer producer = new Producer(loadHandler);
+        try {
 
-        producer.start();
+            final Consumer consumer = new Consumer();
+            final LoadHandler loadHandler = new LoadHandler(consumer);
+            final Producer producer = new Producer(loadHandler);
 
-        final double rate = consumer.getRate();
-        System.out.println("Rate (updates/second): " + rate);
+            // start the producer
+            producer.start();
 
-        if (rate > (MAX_PRICE_UPDATES_PER_SECOND * 1.25)) {
-            throw new RuntimeException("Too many updates per second");
+            // interrupt the producer after 10 seconds
+            scheduler.schedule(producer::interrupt, 10, TimeUnit.SECONDS);
+
+            // print out consumer stats every second
+            ScheduledFuture<?> fut = scheduler.scheduleAtFixedRate(consumer::printStats, 1, 1, TimeUnit.SECONDS);
+
+            // wait for the producer to stop
+            producer.join();
+
+            // cancel the consumer stats printout
+            fut.cancel(false);
+
+            // check the consumer rate, fail if it's too high (tolerance 25%)
+            if (consumer.getRate() > (MAX_PRICE_UPDATES_PER_SECOND * 1.25)) {
+                throw new RuntimeException("Too many updates per second");
+            }
+
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        } finally {
+            scheduler.shutdown();
         }
+
     }
 
     public static class Consumer {
@@ -28,7 +52,7 @@ public class Exercise {
         private long counter;
 
         public synchronized void send(final List<PriceUpdate> priceUpdates) {
-            priceUpdates.forEach(System.out::println);
+            // priceUpdates.forEach(System.out::println);
             counter += priceUpdates.size();
             if (firstReceivedAt == 0) {
                 firstReceivedAt = System.currentTimeMillis();
@@ -38,6 +62,10 @@ public class Exercise {
 
         public double getRate() {
             return (double) counter / (lastReceivedAt - firstReceivedAt) * 1000;
+        }
+
+        public void printStats() {
+            System.out.println("Rate (updates/second): " + this.getRate());
         }
     }
 
@@ -73,7 +101,7 @@ public class Exercise {
         }
 
         public void generateUpdates() {
-            for (int i = 1; i < 10000; i++) {
+            while (!isInterrupted()) {
                 loadHandler.receive(new PriceUpdate("Apple", 97.85));
                 loadHandler.receive(new PriceUpdate("Google", 160.71));
                 loadHandler.receive(new PriceUpdate("Facebook", 91.66));
@@ -83,6 +111,15 @@ public class Exercise {
                 loadHandler.receive(new PriceUpdate("Apple", 97.85));
                 loadHandler.receive(new PriceUpdate("Google", 160.71));
                 loadHandler.receive(new PriceUpdate("Facebook", 91.63));
+
+                // you may want to add some delay if your cpu starts to burn
+                /*
+                try {
+                    Thread.sleep(1);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                */
             }
         }
     }
