@@ -2,6 +2,7 @@ package com.akelius.codechallengeloadhandler;
 
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.stream.*;
 
 public class Exercise {
 
@@ -49,11 +50,13 @@ public class Exercise {
 
         private long firstReceivedAt;
         private long lastReceivedAt;
-        private long counter;
+        private final Map<String, Integer> counters = new HashMap<>();
 
         public synchronized void send(final List<PriceUpdate> priceUpdates) {
             // priceUpdates.forEach(System.out::println);
-            counter += priceUpdates.size();
+            for (PriceUpdate priceUpdate : priceUpdates) {
+                counters.merge(priceUpdate.companyName, 1, Integer::sum);
+            }
             if (firstReceivedAt == 0) {
                 firstReceivedAt = System.currentTimeMillis();
             }
@@ -61,11 +64,16 @@ public class Exercise {
         }
 
         public double getRate() {
-            return (double) counter / (lastReceivedAt - firstReceivedAt) * 1000;
+            return 1000.0 * counters.values().stream().mapToInt(Integer::intValue).sum() / (lastReceivedAt - firstReceivedAt);
+        }
+
+        public double getRate(String companyName) {
+            return 1000.0 * counters.getOrDefault(companyName, 0) / (lastReceivedAt - firstReceivedAt);
         }
 
         public void printStats() {
-            System.out.println("Rate (updates/second): " + this.getRate());
+            String details = counters.keySet().stream().sorted().map(companyName -> companyName + "=" + String.format("%.2f", this.getRate(companyName))).collect(Collectors.joining(", "));
+            System.out.println("Rate (updates/second): " + String.format("%.2f", this.getRate()) + " (" + details + ")");
         }
     }
 
@@ -97,22 +105,14 @@ public class Exercise {
 
         @Override
         public void run() {
-            generateUpdates();
-        }
-
-        public void generateUpdates() {
+            Random rand = new Random();
+            // The price updates are unbalanced on purpose! This makes the life more difficult for the LoadHandler
+            // which should send out a similar number of updates for each company.
+            String[] companies = {"Google", "Google", "Google", "Google", "Google", "Apple", "Facebook"};
             while (!isInterrupted()) {
-                loadHandler.receive(new PriceUpdate("Apple", 97.85));
-                loadHandler.receive(new PriceUpdate("Google", 160.71));
-                loadHandler.receive(new PriceUpdate("Facebook", 91.66));
-                loadHandler.receive(new PriceUpdate("Google", 160.73));
-                loadHandler.receive(new PriceUpdate("Facebook", 91.71));
-                loadHandler.receive(new PriceUpdate("Google", 160.76));
-                loadHandler.receive(new PriceUpdate("Apple", 97.85));
-                loadHandler.receive(new PriceUpdate("Google", 160.71));
-                loadHandler.receive(new PriceUpdate("Facebook", 91.63));
+                loadHandler.receive(new PriceUpdate(companies[rand.nextInt(companies.length)], rand.nextDouble() * 1_000));
 
-                // you may want to add some delay if your cpu starts to burn
+                // add some delay if your cpu starts to burn
                 /*
                 try {
                     Thread.sleep(1);
