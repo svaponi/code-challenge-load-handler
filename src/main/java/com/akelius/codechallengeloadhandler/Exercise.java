@@ -1,7 +1,6 @@
 package com.akelius.codechallengeloadhandler;
 
-import java.util.Arrays;
-import java.util.List;
+import java.util.*;
 
 public class Exercise {
 
@@ -12,7 +11,7 @@ public class Exercise {
         final LoadHandler loadHandler = new LoadHandler(consumer);
         final Producer producer = new Producer(loadHandler);
 
-        producer.run();
+        producer.start();
 
         final double rate = consumer.getRate();
         System.out.println("Rate (updates/second): " + rate);
@@ -52,45 +51,12 @@ public class Exercise {
 
         public void receive(final PriceUpdate priceUpdate) {
 
-            consumer.send(Arrays.asList(priceUpdate));
+            consumer.send(Collections.singletonList(priceUpdate));
         }
 
     }
 
-    public static class PriceUpdate {
-
-        private final String companyName;
-        private final double price;
-
-        public PriceUpdate(final String companyName, final double price) {
-            this.companyName = companyName;
-            this.price = price;
-        }
-
-        public String getCompanyName() {
-            return this.companyName;
-        }
-
-        public double getPrice() {
-            return this.price;
-        }
-
-        @Override
-        public String toString() {
-            return companyName + " - " + price;
-        }
-
-        @Override
-        public boolean equals(final Object obj) {
-            // TODO Please implement this method
-            return super.equals(obj);
-        }
-
-        @Override
-        public int hashCode() {
-            // TODO Please implement this method
-            return super.hashCode();
-        }
+    public record PriceUpdate(String companyName, double price) {
     }
 
     public static class Producer extends Thread {
