@@ -121,15 +121,64 @@ public class Exercise {
 
     public static class LoadHandler implements Consumer<StockPrice> {
 
+        private static final int INTERVAL_MILLIS = 100;
+        private final Map<String, ConcurrentLinkedDeque<StockPrice>> stockPriceBuffer = new ConcurrentHashMap<>();
         private final Consumer<StockPrice> delegate;
 
         public LoadHandler(final Consumer<StockPrice> consumer) {
             this.delegate = consumer;
+            scheduler.scheduleAtFixedRate(this::flushBuffer, 0, INTERVAL_MILLIS, TimeUnit.MILLISECONDS);
         }
 
         @Override
-        public void accept(StockPrice stockPrice) {
-            delegate.accept(stockPrice);
+        public synchronized void accept(StockPrice stockPrice) {
+            stockPriceBuffer
+                    .computeIfAbsent(stockPrice.companyName(), k -> new ConcurrentLinkedDeque<>())
+                    .add(stockPrice);
+        }
+
+        private long lastRun;
+
+        private void flushBuffer() {
+            long now = System.currentTimeMillis();
+            if (lastRun == 0) {
+                lastRun = now;
+                // skip the first run because we cannot know the rate yet
+                return;
+            }
+            long sinceLastRun = now - lastRun;
+            lastRun = now;
+
+            // how many updates we can send out in this interval
+            long batchSize = Math.floorDiv(MAX_PRICE_UPDATES_PER_SECOND * sinceLastRun, 1000);
+
+            // how many updates we have in the buffer
+            int bufferSize = stockPriceBuffer.values().stream().mapToInt(ConcurrentLinkedDeque::size).sum();
+
+            List<StockPrice> stockPricesToPush = new ArrayList<>();
+            if (bufferSize <= batchSize) {
+                stockPriceBuffer.values().forEach(stockPricesToPush::addAll);
+            } else {
+                Set<String> companies = stockPriceBuffer.keySet();
+                synchronized (stockPriceBuffer) {
+                    while (stockPricesToPush.size() < batchSize) {
+                        for (String company : companies) {
+                            ConcurrentLinkedDeque<StockPrice> deque = stockPriceBuffer.get(company);
+                            try {
+                                stockPricesToPush.add(deque.pop());
+                            } catch (Exception e) {
+                                System.out.println("Buffer for " + company + " is empty");
+                                companies.remove(company);
+                            }
+                        }
+                    }
+                    stockPriceBuffer.clear();
+                }
+            }
+
+            for (StockPrice stockPrice : stockPricesToPush) {
+                delegate.accept(stockPrice);
+            }
         }
     }
 
