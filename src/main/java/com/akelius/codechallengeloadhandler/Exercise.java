@@ -1,20 +1,24 @@
 package com.akelius.codechallengeloadhandler;
 
+import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.function.*;
 import java.util.stream.*;
+
 
 public class Exercise {
 
     private static final int MAX_PRICE_UPDATES_PER_SECOND = 100;
+    private static final double TOLERANCE = 0.20;
     private static final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
 
     public static void main(final String[] args) {
         try {
 
-            final Consumer consumer = new Consumer();
+            final StockPriceConsumer consumer = new StockPriceConsumer();
             final LoadHandler loadHandler = new LoadHandler(consumer);
-            final Producer producer = new Producer(loadHandler);
+            final StockPriceProducer producer = new StockPriceProducer(loadHandler);
 
             // start the producer
             producer.start();
@@ -31,10 +35,26 @@ public class Exercise {
             // cancel the consumer stats printout
             fut.cancel(false);
 
-            // check the consumer rate, fail if it's too high (tolerance 25%)
-            if (consumer.getRate() > (MAX_PRICE_UPDATES_PER_SECOND * 1.25)) {
+            StockPriceStats stats = consumer.getStats();
+
+            // check the consumer rate, fail if it's too high (with tolerance)
+            if (stats.rate > (MAX_PRICE_UPDATES_PER_SECOND * (1 + TOLERANCE))) {
                 throw new RuntimeException("Too many updates per second");
             }
+
+            // check the consumer rate per stock, fail if it's too high (with tolerance)
+            for (StockPriceCompanyStats stockStats : stats.companyStats) {
+                if (stockStats.rate > (MAX_PRICE_UPDATES_PER_SECOND * (1 + TOLERANCE) / stats.companyStats.size())) {
+                    throw new RuntimeException("Too many updates per second for " + stockStats.companyName);
+                }
+            }
+
+            // check the consumer collected any warnings
+            if (!stats.warnings.isEmpty()) {
+                throw new RuntimeException("Consumer warnings: " + stats.warnings);
+            }
+
+            System.out.println("Nice job!");
 
         } catch (RuntimeException e) {
             throw e;
@@ -43,64 +63,89 @@ public class Exercise {
         } finally {
             scheduler.shutdown();
         }
-
     }
 
-    public static class Consumer {
+    public static class StockPriceConsumer implements Consumer<StockPrice> {
 
         private long firstReceivedAt;
         private long lastReceivedAt;
         private final Map<String, Integer> counters = new HashMap<>();
+        private final Map<String, Instant> lastStockPriceTimestamps = new HashMap<>();
+        private final Set<String> warnings = new HashSet<>();
 
-        public synchronized void send(final List<PriceUpdate> priceUpdates) {
-            // priceUpdates.forEach(System.out::println);
-            for (PriceUpdate priceUpdate : priceUpdates) {
-                counters.merge(priceUpdate.companyName, 1, Integer::sum);
+        @Override
+        public synchronized void accept(StockPrice stockPrice) {
+            counters.merge(stockPrice.companyName, 1, Integer::sum);
+            Instant lastStockPriceTimestamp = lastStockPriceTimestamps.put(stockPrice.companyName, stockPrice.timestamp);
+            if (lastStockPriceTimestamp != null && stockPrice.timestamp.isBefore(lastStockPriceTimestamp)) {
+                warnings.add("Obsolete stock price for " + stockPrice.companyName);
             }
+            long now = System.currentTimeMillis();
             if (firstReceivedAt == 0) {
-                firstReceivedAt = System.currentTimeMillis();
+                firstReceivedAt = now;
             }
-            lastReceivedAt = System.currentTimeMillis();
+            lastReceivedAt = now;
         }
 
-        public double getRate() {
-            return 1000.0 * counters.values().stream().mapToInt(Integer::intValue).sum() / (lastReceivedAt - firstReceivedAt);
+        private double calcRate(Integer count) {
+            long div = lastReceivedAt - firstReceivedAt;
+            return div == 0 ? 0.0 : 1000.0 * count / div;
         }
 
-        public double getRate(String companyName) {
-            return 1000.0 * counters.getOrDefault(companyName, 0) / (lastReceivedAt - firstReceivedAt);
+        public synchronized StockPriceStats getStats() {
+            double rate = calcRate(counters.values().stream().mapToInt(Integer::intValue).sum());
+            List<StockPriceCompanyStats> stockStats = counters.keySet().stream()
+                    .map(s -> new StockPriceCompanyStats(s, this.calcRate(counters.getOrDefault(s, 0))))
+                    .collect(Collectors.toList());
+            return new StockPriceStats(rate, stockStats, warnings);
         }
 
         public void printStats() {
-            String details = counters.keySet().stream().sorted().map(companyName -> companyName + "=" + String.format("%.2f", this.getRate(companyName))).collect(Collectors.joining(", "));
-            System.out.println("Rate (updates/second): " + String.format("%.2f", this.getRate()) + " (" + details + ")");
+            System.out.println(this.getStats());
         }
     }
 
-    public static class LoadHandler {
+    public record StockPriceCompanyStats(String companyName, double rate) {
+    }
 
-        private final Consumer consumer;
+    public record StockPriceStats(double rate, List<StockPriceCompanyStats> companyStats, Set<String> warnings) {
+        @Override
+        public String toString() {
+            String distribution = companyStats.stream()
+                    .sorted(Comparator.comparing(StockPriceCompanyStats::companyName))
+                    .map(s -> s.companyName + "=" + String.format("%.2f", 100.0 * s.rate / rate) + "%")
+                    .collect(Collectors.joining(", "));
+            return "Rate (updates/second): " + String.format("%.2f", rate) + " - Distribution (" + distribution + ")" + (warnings.isEmpty() ? "" : (" - Warnings: " + warnings));
+        }
+    }
 
-        public LoadHandler(final Consumer consumer) {
+    public static class LoadHandler implements Consumer<StockPrice> {
+
+        private final Consumer<StockPrice> delegate;
+
+        public LoadHandler(final Consumer<StockPrice> consumer) {
+            this.delegate = consumer;
+        }
+
+        @Override
+        public void accept(StockPrice stockPrice) {
+            delegate.accept(stockPrice);
+        }
+    }
+
+    public record StockPrice(String companyName, double price, Instant timestamp) {
+
+        public StockPrice(String companyName, double price) {
+            this(companyName, price, Instant.now());
+        }
+    }
+
+    public static class StockPriceProducer extends Thread {
+
+        private final Consumer<StockPrice> consumer;
+
+        public StockPriceProducer(final Consumer<StockPrice> consumer) {
             this.consumer = consumer;
-        }
-
-        public void receive(final PriceUpdate priceUpdate) {
-
-            consumer.send(Collections.singletonList(priceUpdate));
-        }
-
-    }
-
-    public record PriceUpdate(String companyName, double price) {
-    }
-
-    public static class Producer extends Thread {
-
-        private final LoadHandler loadHandler;
-
-        public Producer(final LoadHandler loadHandler) {
-            this.loadHandler = loadHandler;
         }
 
         @Override
@@ -110,7 +155,7 @@ public class Exercise {
             // which should send out a similar number of updates for each company.
             String[] companies = {"Google", "Google", "Google", "Google", "Google", "Apple", "Facebook"};
             while (!isInterrupted()) {
-                loadHandler.receive(new PriceUpdate(companies[rand.nextInt(companies.length)], rand.nextDouble() * 1_000));
+                consumer.accept(new StockPrice(companies[rand.nextInt(companies.length)], rand.nextDouble() * 1_000));
 
                 // add some delay if your cpu starts to burn
                 /*

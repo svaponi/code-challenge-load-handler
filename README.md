@@ -4,11 +4,11 @@
 
 The system consists of three components:
 
-- **Producer** (`com.akelius.codechallengeloadhandler.Exercise.Producer`): This component generates continuous price
+- **Producer** (`com.akelius.codechallengeloadhandler.Exercise.StockPriceProducer`): This component generates continuous price
   updates for stocks. It should operate without blocking, ensuring that each price update is consumed as quickly as
   possible.
 
-- **Consumer** (`com.akelius.codechallengeloadhandler.Exercise.Consumer`): This component processes the price updates.
+- **Consumer** (`com.akelius.codechallengeloadhandler.Exercise.StockPriceConsumer`): This component processes the price updates.
   **It represents a legacy system that can handle only a limited number of price updates per second**.
 
 - **Load Handler** (`com.akelius.codechallengeloadhandler.Exercise.LoadHandler`): This component manages the flow of
